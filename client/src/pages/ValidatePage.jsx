@@ -28,8 +28,8 @@ export default function ValidatePage() {
         Gate validator
       </h1>
       <p className="muted">
-        Simulate a station gate. Paste a ticket id (e.g. from the ticket page).
-        Active tickets can be used once.
+        Simulate a station gate. Paste a ticket id. Single = 1 use, return = 2,
+        day pass = many until midnight.
       </p>
 
       <form
@@ -53,7 +53,8 @@ export default function ValidatePage() {
         {error && <p className="error">{error}</p>}
         {result?.ok && (
           <p style={{ color: "var(--ok)", fontWeight: 600, marginBottom: 0 }}>
-            Access granted · used at {new Date(result.usedAt).toLocaleString()}
+            Access granted · {result.remainingUses} use(s) left ·{" "}
+            {new Date(result.usedAt).toLocaleString()}
           </p>
         )}
       </form>

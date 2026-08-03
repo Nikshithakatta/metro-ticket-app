@@ -25,7 +25,9 @@ export function buildQrPayload(ticket) {
   return JSON.stringify({
     tid: ticket.id,
     bid: ticket.booking_id,
+    typ: ticket.ticket_type,
     exp: ticket.valid_to,
+    sh: ticket.share_token,
     sig: ticket.signature,
   });
 }

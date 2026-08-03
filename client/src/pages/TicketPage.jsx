@@ -2,10 +2,17 @@ import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { api } from "../api.js";
 
+function ticketTypeLabel(t) {
+  if (t === "return") return "Return";
+  if (t === "day_pass") return "Day pass";
+  return "Single";
+}
+
 export default function TicketPage() {
   const { id } = useParams();
   const [ticket, setTicket] = useState(null);
   const [error, setError] = useState("");
+  const [copied, setCopied] = useState(false);
 
   useEffect(() => {
     api
@@ -32,6 +39,27 @@ export default function TicketPage() {
   }
 
   const b = ticket.booking;
+  const shareUrl =
+    typeof window !== "undefined"
+      ? `${window.location.origin}${ticket.sharePath}`
+      : ticket.sharePath;
+
+  async function copyShare() {
+    try {
+      await navigator.clipboard.writeText(shareUrl);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      setCopied(false);
+    }
+  }
+
+  function downloadQr() {
+    const a = document.createElement("a");
+    a.href = ticket.qrDataUrl;
+    a.download = `metrocity-${ticket.id}.png`;
+    a.click();
+  }
 
   return (
     <section className="section fade-in">
@@ -60,7 +88,11 @@ export default function TicketPage() {
               {b.from.name} → {b.to.name}
             </div>
             <p className="muted" style={{ margin: "0.35rem 0 0" }}>
-              {b.passengerName} · {b.fareDisplay} · {b.hops} hops
+              {ticketTypeLabel(ticket.ticketType)} · {b.passengerName} ·{" "}
+              {b.fareDisplay}
+              {ticket.maxUses > 1
+                ? ` · ${ticket.remainingUses}/${ticket.maxUses} uses left`
+                : ""}
             </p>
           </div>
         </div>
@@ -77,6 +109,21 @@ export default function TicketPage() {
               VALID UNTIL
             </div>
             <div>{new Date(ticket.validTo).toLocaleString()}</div>
+          </div>
+        </div>
+
+        <div className="share-box">
+          <div className="muted" style={{ fontSize: "0.78rem" }}>
+            SHARE LINK
+          </div>
+          <code className="share-url">{shareUrl}</code>
+          <div className="actions" style={{ marginTop: "0.75rem" }}>
+            <button type="button" className="btn btn-primary" style={{ width: "auto" }} onClick={copyShare}>
+              {copied ? "Copied" : "Copy share link"}
+            </button>
+            <button type="button" className="btn btn-ghost" onClick={downloadQr}>
+              Download QR
+            </button>
           </div>
         </div>
 

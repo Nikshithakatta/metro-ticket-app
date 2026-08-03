@@ -1,18 +1,46 @@
 import { useEffect, useMemo, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { api } from "../api.js";
+import { useAuth } from "../auth.jsx";
+import StationSearch from "../components/StationSearch.jsx";
+
+const TICKET_TYPES = [
+  {
+    id: "single",
+    label: "Single",
+    hint: "1 ride · 120 min",
+  },
+  {
+    id: "return",
+    label: "Return",
+    hint: "2 rides · 240 min · 1.8×",
+  },
+  {
+    id: "day_pass",
+    label: "Day pass",
+    hint: "Unlimited · ₹80 · until midnight",
+  },
+];
 
 export default function Home() {
   const navigate = useNavigate();
+  const { user, isLoggedIn } = useAuth();
   const [stations, setStations] = useState([]);
   const [lines, setLines] = useState([]);
   const [from, setFrom] = useState("university");
   const [to, setTo] = useState("airport");
-  const [name, setName] = useState("Guest Rider");
+  const [ticketType, setTicketType] = useState("single");
+  const [name, setName] = useState("");
   const [journey, setJourney] = useState(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [paying, setPaying] = useState(false);
+  const [crowd, setCrowd] = useState(null);
+  const [trains, setTrains] = useState([]);
+
+  useEffect(() => {
+    if (user?.name) setName(user.name);
+  }, [user]);
 
   useEffect(() => {
     Promise.all([api.stations(), api.lines()])
@@ -23,7 +51,30 @@ export default function Home() {
       .catch((e) => setError(e.message));
   }, []);
 
-  const canPlan = from && to && from !== to;
+  useEffect(() => {
+    if (!from) return;
+    let cancelled = false;
+    Promise.all([api.crowd(from), api.nextTrains(from, 4)])
+      .then(([c, n]) => {
+        if (cancelled) return;
+        setCrowd(c);
+        setTrains(n.trains || []);
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setCrowd(null);
+          setTrains([]);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [from]);
+
+  const canPlan =
+    from &&
+    to &&
+    (ticketType === "day_pass" || from !== to);
 
   async function planJourney(e) {
     e?.preventDefault();
@@ -32,7 +83,7 @@ export default function Home() {
     setLoading(true);
     setJourney(null);
     try {
-      const j = await api.journey(from, to);
+      const j = await api.journey(from, to, ticketType);
       setJourney(j);
     } catch (err) {
       setError(err.message);
@@ -49,7 +100,8 @@ export default function Home() {
       const booking = await api.createBooking({
         from,
         to,
-        passengerName: name,
+        passengerName: name || user?.name || "Guest",
+        ticketType,
       });
       const { ticket } = await api.payBooking(booking.id);
       navigate(`/ticket/${ticket.id}`);
@@ -72,8 +124,8 @@ export default function Home() {
           <div className="hero-copy fade-in">
             <h1>MetroCity</h1>
             <p>
-              Plan a ride across Blue and Green lines, pay in one tap, and carry
-              a signed QR ticket at the gate.
+              Search stations, pick single / return / day pass, and carry a
+              signed QR ticket at the gate.
             </p>
             <div className="track-visual" aria-hidden="true">
               <span />
@@ -82,35 +134,53 @@ export default function Home() {
 
           <form className="panel fade-in" onSubmit={planJourney}>
             <h2>Book a journey</h2>
+            {!isLoggedIn && (
+              <p className="muted" style={{ marginTop: 0, fontSize: "0.88rem" }}>
+                Guest checkout works.{" "}
+                <Link to="/login" style={{ color: "var(--cyan-deep)" }}>
+                  Sign in
+                </Link>{" "}
+                to keep personal history.
+              </p>
+            )}
+            <div className="ticket-type-row" role="radiogroup" aria-label="Ticket type">
+              {TICKET_TYPES.map((t) => (
+                <button
+                  key={t.id}
+                  type="button"
+                  className={`ticket-type${ticketType === t.id ? " active" : ""}`}
+                  onClick={() => {
+                    setTicketType(t.id);
+                    setJourney(null);
+                  }}
+                  aria-pressed={ticketType === t.id}
+                >
+                  <strong>{t.label}</strong>
+                  <span>{t.hint}</span>
+                </button>
+              ))}
+            </div>
             <div className="row-2">
-              <div className="field">
-                <label htmlFor="from">From</label>
-                <select
-                  id="from"
-                  value={from}
-                  onChange={(e) => setFrom(e.target.value)}
-                >
-                  {stations.map((s) => (
-                    <option key={s.id} value={s.id}>
-                      {s.name}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <div className="field">
-                <label htmlFor="to">To</label>
-                <select
-                  id="to"
-                  value={to}
-                  onChange={(e) => setTo(e.target.value)}
-                >
-                  {stations.map((s) => (
-                    <option key={s.id} value={s.id}>
-                      {s.name}
-                    </option>
-                  ))}
-                </select>
-              </div>
+              <StationSearch
+                id="from"
+                label="From"
+                value={from}
+                onChange={(id) => {
+                  setFrom(id);
+                  setJourney(null);
+                }}
+                stations={stations}
+              />
+              <StationSearch
+                id="to"
+                label="To"
+                value={to}
+                onChange={(id) => {
+                  setTo(id);
+                  setJourney(null);
+                }}
+                stations={stations}
+              />
             </div>
             <div className="field">
               <label htmlFor="passenger">Passenger name</label>
@@ -130,6 +200,34 @@ export default function Home() {
       </section>
 
       <section className="section">
+        {(crowd || trains.length > 0) && (
+          <div className="live-strip fade-in">
+            {crowd && (
+              <div className={`crowd-chip crowd-${crowd.level}`}>
+                <span className="muted">Crowd at {crowd.stationName}</span>
+                <strong>{crowd.label}</strong>
+              </div>
+            )}
+            <div className="next-trains">
+              <span className="muted">Next trains</span>
+              <ul>
+                {trains.map((t, i) => (
+                  <li key={`${t.lineId}-${t.departure}-${i}`}>
+                    <span
+                      className="line-chip"
+                      style={{ background: t.lineColor }}
+                    >
+                      {t.lineName}
+                    </span>
+                    <strong>{t.departure}</strong>
+                    <span className="muted">in {t.minutesUntil} min</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          </div>
+        )}
+
         {journey && (
           <div className="journey-card fade-in">
             <div
@@ -146,7 +244,8 @@ export default function Home() {
                   {journey.from.name} → {journey.to.name}
                 </h2>
                 <p className="muted" style={{ margin: "0.35rem 0 0" }}>
-                  {journey.hops} hops · ~{journey.minutes} min
+                  {journey.ticketType.replace("_", " ")} · {journey.hops} hops · ~
+                  {journey.minutes} min
                   {journey.transfers.length
                     ? ` · ${journey.transfers.length} transfer`
                     : ""}
@@ -197,19 +296,33 @@ export default function Home() {
               </button>
             </div>
             <p className="muted" style={{ marginBottom: 0, fontSize: "0.85rem" }}>
-              Payment is mocked for this demo. Ticket stays valid for 120 minutes.
+              Payment is mocked.{" "}
+              {ticketType === "day_pass"
+                ? "Day pass valid until midnight."
+                : ticketType === "return"
+                  ? "Return: 2 gate entries within 240 minutes."
+                  : "Single: 1 entry within 120 minutes."}
             </p>
           </div>
         )}
 
         <div style={{ marginTop: "2rem" }}>
-          <h2 style={{ fontFamily: "var(--font-display)", letterSpacing: "-0.03em" }}>
+          <h2
+            style={{
+              fontFamily: "var(--font-display)",
+              letterSpacing: "-0.03em",
+            }}
+          >
             Network map
           </h2>
           <p className="muted">Two lines meet at Central.</p>
           <div className="map-strip">
             {lines.map((line) => (
-              <div key={line.id} className="line-card" style={{ color: line.color }}>
+              <div
+                key={line.id}
+                className="line-card"
+                style={{ color: line.color }}
+              >
                 <h3 style={{ color: line.color }}>{line.name}</h3>
                 {line.stations.map((s) => (
                   <div key={s.id} className="station-mini">

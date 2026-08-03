@@ -1,22 +1,14 @@
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
-import { db, initSchema } from "./db.js";
+import bcrypt from "bcryptjs";
+import { nanoid } from "nanoid";
+import { db, resetSchema } from "./db.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const dataDir = path.join(__dirname, "..", "data");
-fs.mkdirSync(dataDir, { recursive: true });
+fs.mkdirSync(path.join(__dirname, "..", "data"), { recursive: true });
 
-initSchema();
-
-db.exec(`
-  DELETE FROM tickets;
-  DELETE FROM bookings;
-  DELETE FROM edges;
-  DELETE FROM station_lines;
-  DELETE FROM stations;
-  DELETE FROM lines;
-`);
+resetSchema();
 
 const lines = [
   { id: "blue", name: "Blue Line", color: "#1B6CA8" },
@@ -24,7 +16,6 @@ const lines = [
 ];
 
 const stations = [
-  // Blue line (seq 1..8), Central is interchange
   { id: "northgate", name: "Northgate", zone: 1 },
   { id: "lakeview", name: "Lakeview", zone: 1 },
   { id: "museum", name: "Museum", zone: 1 },
@@ -33,7 +24,6 @@ const stations = [
   { id: "techpark", name: "Tech Park", zone: 2 },
   { id: "airport", name: "Airport", zone: 3 },
   { id: "harbor", name: "Harbor", zone: 3 },
-  // Green line extras
   { id: "university", name: "University", zone: 1 },
   { id: "market", name: "Market Square", zone: 1 },
   { id: "stadium", name: "Stadium", zone: 2 },
@@ -74,6 +64,10 @@ const insertSL = db.prepare(
 const insertEdge = db.prepare(
   "INSERT INTO edges (from_id, to_id, minutes) VALUES (?, ?, ?)"
 );
+const insertSched = db.prepare(
+  `INSERT INTO schedules (line_id, station_id, headway_minutes, first_minute, last_minute)
+   VALUES (?, ?, ?, ?, ?)`
+);
 
 const tx = db.transaction(() => {
   for (const l of lines) insertLine.run(l);
@@ -83,18 +77,31 @@ const tx = db.transaction(() => {
 
   function linkChain(seq) {
     for (let i = 0; i < seq.length - 1; i++) {
-      const a = seq[i];
-      const b = seq[i + 1];
-      insertEdge.run(a, b, 3);
-      insertEdge.run(b, a, 3);
+      insertEdge.run(seq[i], seq[i + 1], 3);
+      insertEdge.run(seq[i + 1], seq[i], 3);
     }
   }
   linkChain(blueSeq);
   linkChain(greenSeq);
+
+  // Headways: blue every 5 min, green every 6 min; service ~05:30–23:00
+  for (const id of blueSeq) insertSched.run("blue", id, 5, 330, 1380);
+  for (const id of greenSeq) insertSched.run("green", id, 6, 330, 1380);
+
+  const demoId = `usr_${nanoid(8)}`;
+  db.prepare(
+    `INSERT INTO users (id, email, password_hash, name, created_at) VALUES (?, ?, ?, ?, ?)`
+  ).run(
+    demoId,
+    "demo@metrocity.local",
+    bcrypt.hashSync("demo1234", 10),
+    "Demo Rider",
+    new Date().toISOString()
+  );
 });
 
 tx();
 
 console.log(
-  `Seeded MetroCity: ${stations.length} stations, ${lines.length} lines.`
+  `Seeded MetroCity: ${stations.length} stations, ${lines.length} lines, schedules + demo user demo@metrocity.local / demo1234`
 );

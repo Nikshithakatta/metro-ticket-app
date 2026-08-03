@@ -8,15 +8,25 @@ import { fileURLToPath } from "url";
 import { db, initSchema } from "./db.js";
 import {
   findPath,
-  hopsFarePaise,
+  fareForType,
+  validityForType,
   enrichPath,
   detectTransfers,
+  crowdHint,
+  nextTrains,
 } from "./journey.js";
 import {
   signTicket,
   verifyTicketSignature,
   buildQrPayload,
 } from "./tickets.js";
+import {
+  registerUser,
+  loginUser,
+  issueToken,
+  authOptional,
+  authRequired,
+} from "./auth.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -35,9 +45,36 @@ const clientDist = path.resolve(__dirname, "../../client/dist");
 
 app.use(cors());
 app.use(express.json());
+app.use(authOptional);
+
+const TICKET_TYPES = new Set(["single", "return", "day_pass"]);
 
 app.get("/api/health", (_req, res) => {
   res.json({ ok: true, city: "MetroCity" });
+});
+
+app.post("/api/auth/register", (req, res) => {
+  try {
+    const user = registerUser(req.body || {});
+    const token = issueToken(user);
+    res.status(201).json({ user, token });
+  } catch (err) {
+    res.status(err.status || 500).json({ error: err.message });
+  }
+});
+
+app.post("/api/auth/login", (req, res) => {
+  try {
+    const user = loginUser(req.body || {});
+    const token = issueToken(user);
+    res.json({ user, token });
+  } catch (err) {
+    res.status(err.status || 500).json({ error: err.message });
+  }
+});
+
+app.get("/api/auth/me", authRequired, (req, res) => {
+  res.json({ user: req.user });
 });
 
 app.get("/api/stations", (req, res) => {
@@ -97,13 +134,30 @@ app.get("/api/lines", (_req, res) => {
   res.json(result);
 });
 
+app.get("/api/stations/:id/crowd", (req, res) => {
+  const hint = crowdHint(req.params.id);
+  if (!hint) return res.status(404).json({ error: "Unknown station" });
+  res.json(hint);
+});
+
+app.get("/api/stations/:id/next-trains", (req, res) => {
+  const station = db
+    .prepare("SELECT id FROM stations WHERE id = ?")
+    .get(req.params.id);
+  if (!station) return res.status(404).json({ error: "Unknown station" });
+  const limit = Math.min(Number(req.query.limit) || 3, 8);
+  res.json({ stationId: req.params.id, trains: nextTrains(req.params.id, limit) });
+});
+
 app.get("/api/journey", (req, res) => {
   const from = (req.query.from || "").toString();
   const to = (req.query.to || "").toString();
+  const ticketType = normalizeTicketType(req.query.ticketType || req.query.type);
+
   if (!from || !to) {
     return res.status(400).json({ error: "from and to are required" });
   }
-  if (from === to) {
+  if (ticketType !== "day_pass" && from === to) {
     return res.status(400).json({ error: "from and to must differ" });
   }
 
@@ -119,13 +173,15 @@ app.get("/api/journey", (req, res) => {
   }
 
   const hops = Math.max(0, result.path.length - 1);
-  const farePaise = hopsFarePaise(hops);
+  const farePaise = fareForType(hops, ticketType);
   const stations = enrichPath(result.path);
   const transfers = detectTransfers(stations);
+  const validity = validityForType(ticketType);
 
   res.json({
     from: fromS,
     to: toS,
+    ticketType,
     path: result.path,
     stations,
     hops,
@@ -133,16 +189,25 @@ app.get("/api/journey", (req, res) => {
     transfers,
     farePaise,
     fareDisplay: `₹${(farePaise / 100).toFixed(0)}`,
+    validMinutes:
+      ticketType === "day_pass"
+        ? null
+        : Math.round((validity.validTo - validity.validFrom) / 60000),
+    maxUses: validity.maxUses,
   });
 });
 
 app.post("/api/bookings", (req, res) => {
-  const { from, to, passengerName } = req.body || {};
-  const name = (passengerName || "Guest").toString().trim().slice(0, 80) || "Guest";
+  const { from, to, passengerName, ticketType: rawType } = req.body || {};
+  const ticketType = normalizeTicketType(rawType);
+  const name =
+    (passengerName || req.user?.name || "Guest").toString().trim().slice(0, 80) ||
+    "Guest";
+
   if (!from || !to) {
     return res.status(400).json({ error: "from and to are required" });
   }
-  if (from === to) {
+  if (ticketType !== "day_pass" && from === to) {
     return res.status(400).json({ error: "from and to must differ" });
   }
 
@@ -152,19 +217,23 @@ app.post("/api/bookings", (req, res) => {
   }
 
   const hops = Math.max(0, result.path.length - 1);
-  const farePaise = hopsFarePaise(hops);
+  const farePaise = fareForType(hops, ticketType);
   const id = `bk_${nanoid(10)}`;
   const createdAt = new Date().toISOString();
+  const userId = req.user?.id || null;
 
   db.prepare(
     `
     INSERT INTO bookings
-      (id, passenger_name, from_station_id, to_station_id, hops, fare_paise, path_json, status, created_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?)
+      (id, user_id, passenger_name, ticket_type, from_station_id, to_station_id,
+       hops, fare_paise, path_json, status, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)
   `
   ).run(
     id,
+    userId,
     name,
+    ticketType,
     from,
     to,
     hops,
@@ -173,8 +242,7 @@ app.post("/api/bookings", (req, res) => {
     createdAt
   );
 
-  const booking = getBooking(id);
-  res.status(201).json(booking);
+  res.status(201).json(getBooking(id));
 });
 
 app.get("/api/bookings/:id", (req, res) => {
@@ -189,21 +257,28 @@ app.post("/api/bookings/:id/pay", async (req, res) => {
     .get(req.params.id);
   if (!booking) return res.status(404).json({ error: "Booking not found" });
   if (booking.status === "paid") {
-    const existing = getTicketByBooking(booking.id);
-    return res.json({ booking: getBooking(booking.id), ticket: existing });
+    const existingId = getTicketIdByBooking(booking.id);
+    return res.json({
+      booking: getBooking(booking.id),
+      ticket: await formatTicket(existingId),
+    });
   }
   if (booking.status !== "pending") {
-    return res.status(400).json({ error: `Cannot pay booking in status ${booking.status}` });
+    return res
+      .status(400)
+      .json({ error: `Cannot pay booking in status ${booking.status}` });
   }
 
-  // Mock payment always succeeds
+  const ticketType = booking.ticket_type || "single";
+  const { validFrom, validTo, maxUses } = validityForType(ticketType);
   const ticketId = `tk_${nanoid(10)}`;
-  const validFrom = new Date();
-  const validTo = new Date(validFrom.getTime() + 120 * 60 * 1000); // 120 minutes
+  const shareToken = nanoid(16);
   const signature = signTicket(ticketId, validTo.toISOString());
   const ticketRow = {
     id: ticketId,
     booking_id: booking.id,
+    ticket_type: ticketType,
+    share_token: shareToken,
     signature,
     status: "active",
     valid_from: validFrom.toISOString(),
@@ -216,22 +291,28 @@ app.post("/api/bookings/:id/pay", async (req, res) => {
     db.prepare(
       `
       INSERT INTO tickets
-        (id, booking_id, qr_payload, signature, status, valid_from, valid_to)
-      VALUES (?, ?, ?, ?, 'active', ?, ?)
+        (id, booking_id, ticket_type, share_token, qr_payload, signature, status,
+         max_uses, uses_count, valid_from, valid_to)
+      VALUES (?, ?, ?, ?, ?, ?, 'active', ?, 0, ?, ?)
     `
     ).run(
       ticketId,
       booking.id,
+      ticketType,
+      shareToken,
       qrPayload,
       signature,
+      maxUses,
       validFrom.toISOString(),
       validTo.toISOString()
     );
   });
   tx();
 
-  const ticket = await formatTicket(ticketId);
-  res.json({ booking: getBooking(booking.id), ticket });
+  res.json({
+    booking: getBooking(booking.id),
+    ticket: await formatTicket(ticketId),
+  });
 });
 
 app.get("/api/tickets/:id", async (req, res) => {
@@ -240,39 +321,49 @@ app.get("/api/tickets/:id", async (req, res) => {
   res.json(ticket);
 });
 
-app.get("/api/bookings", (req, res) => {
+app.get("/api/share/:token", async (req, res) => {
+  const row = db
+    .prepare("SELECT id FROM tickets WHERE share_token = ?")
+    .get(req.params.token);
+  if (!row) return res.status(404).json({ error: "Shared ticket not found" });
+  res.json(await formatTicket(row.id));
+});
+
+app.get("/api/bookings", authRequired, (req, res) => {
   const limit = Math.min(Number(req.query.limit) || 20, 50);
   const rows = db
     .prepare(
       `
-      SELECT b.*, t.id AS ticket_id, t.status AS ticket_status
+      SELECT b.*, t.id AS ticket_id, t.status AS ticket_status, t.share_token
       FROM bookings b
       LEFT JOIN tickets t ON t.booking_id = b.id
+      WHERE b.user_id = ?
       ORDER BY b.created_at DESC
       LIMIT ?
     `
     )
-    .all(limit);
+    .all(req.user.id, limit);
 
   res.json(
     rows.map((r) => ({
       ...shapeBooking(r),
       ticketId: r.ticket_id || null,
       ticketStatus: r.ticket_status || null,
+      shareToken: r.share_token || null,
     }))
   );
 });
 
-/** Gate simulator: mark ticket used once. */
+/** Gate simulator: consume one use; mark used when max reached. */
 app.post("/api/tickets/:id/validate", (req, res) => {
   const row = db.prepare("SELECT * FROM tickets WHERE id = ?").get(req.params.id);
   if (!row) return res.status(404).json({ error: "Ticket not found" });
 
   const now = new Date();
   if (new Date(row.valid_to) < now) {
-    db.prepare("UPDATE tickets SET status = 'expired' WHERE id = ? AND status = 'active'").run(
-      row.id
-    );
+    db.prepare(
+      "UPDATE tickets SET status = 'expired' WHERE id = ? AND status = 'active'"
+    ).run(row.id);
     return res.status(400).json({ ok: false, error: "Ticket expired" });
   }
 
@@ -287,14 +378,34 @@ app.post("/api/tickets/:id/validate", (req, res) => {
     return res.status(400).json({ ok: false, error: `Ticket is ${row.status}` });
   }
 
+  const maxUses = row.max_uses ?? 1;
+  const usesCount = (row.uses_count || 0) + 1;
   const usedAt = now.toISOString();
-  db.prepare("UPDATE tickets SET status = 'used', used_at = ? WHERE id = ?").run(
-    usedAt,
-    row.id
-  );
+  const exhausted = usesCount >= maxUses;
 
-  res.json({ ok: true, ticketId: row.id, usedAt });
+  db.prepare(
+    `
+    UPDATE tickets
+    SET uses_count = ?, status = ?, used_at = ?
+    WHERE id = ?
+  `
+  ).run(usesCount, exhausted ? "used" : "active", usedAt, row.id);
+
+  res.json({
+    ok: true,
+    ticketId: row.id,
+    usedAt,
+    usesCount,
+    maxUses,
+    remainingUses: Math.max(0, maxUses - usesCount),
+    status: exhausted ? "used" : "active",
+  });
 });
+
+function normalizeTicketType(raw) {
+  const t = (raw || "single").toString();
+  return TICKET_TYPES.has(t) ? t : "single";
+}
 
 function getBooking(id) {
   const row = db.prepare("SELECT * FROM bookings WHERE id = ?").get(id);
@@ -311,7 +422,9 @@ function shapeBooking(row) {
     .get(row.to_station_id);
   return {
     id: row.id,
+    userId: row.user_id || null,
     passengerName: row.passenger_name,
+    ticketType: row.ticket_type || "single",
     from,
     to,
     hops: row.hops,
@@ -323,7 +436,7 @@ function shapeBooking(row) {
   };
 }
 
-function getTicketByBooking(bookingId) {
+function getTicketIdByBooking(bookingId) {
   const row = db
     .prepare("SELECT id FROM tickets WHERE booking_id = ?")
     .get(bookingId);
@@ -331,10 +444,10 @@ function getTicketByBooking(bookingId) {
 }
 
 async function formatTicket(id) {
+  if (!id) return null;
   const row = db.prepare("SELECT * FROM tickets WHERE id = ?").get(id);
   if (!row) return null;
 
-  // Lazy expire
   if (row.status === "active" && new Date(row.valid_to) < new Date()) {
     db.prepare("UPDATE tickets SET status = 'expired' WHERE id = ?").run(id);
     row.status = "expired";
@@ -347,20 +460,27 @@ async function formatTicket(id) {
     width: 280,
   });
 
+  const sharePath = `/share/${row.share_token}`;
+
   return {
     id: row.id,
     bookingId: row.booking_id,
+    ticketType: row.ticket_type || booking?.ticketType || "single",
     status: row.status,
+    maxUses: row.max_uses ?? 1,
+    usesCount: row.uses_count || 0,
+    remainingUses: Math.max(0, (row.max_uses ?? 1) - (row.uses_count || 0)),
     validFrom: row.valid_from,
     validTo: row.valid_to,
     usedAt: row.used_at,
+    shareToken: row.share_token,
+    sharePath,
     qrPayload: row.qr_payload,
     qrDataUrl,
     booking,
   };
 }
 
-// Production: serve built React app when client/dist exists
 if (fs.existsSync(clientDist)) {
   app.use(express.static(clientDist));
   app.get(/^\/(?!api).*/, (_req, res) => {
