@@ -64,36 +64,32 @@ npm start --prefix server   # other terminal
 npm run smoke --prefix server
 ```
 
-### Continuous Delivery
+### Continuous Delivery (Render)
 
 Workflow: `.github/workflows/deploy.yml`
 
-- Runs after **CI succeeds** on `main`/`master`, or via **workflow_dispatch**
-- Rebuilds the app
-- If secret `RENDER_DEPLOY_HOOK_URL` is set, triggers a [Render Deploy Hook](https://render.com/docs/deploy-hooks)
+```text
+CI green on main → Deploy workflow → Render Deploy Hook → Docker build on Render
+```
 
-Also included:
+- Runs **only after CI succeeds** (Render `autoDeploy` is off in `render.yaml`)
+- Manual run: Actions → **Deploy** → **Run workflow**
+- Full click-through guide: **[DEPLOY.md](./DEPLOY.md)**
 
 | File | Purpose |
 |------|---------|
 | `Dockerfile` | Multi-stage image (client build + Node API + seed) |
-| `render.yaml` | Blueprint for a Render Docker web service |
+| `render.yaml` | Render Blueprint (Docker web service, autoDeploy off) |
+| `DEPLOY.md` | How to connect Render + GitHub secret |
 
-**Enable Render CD**
+**Enable CD (summary)**
 
-1. Push this repo to GitHub  
-2. Create a Render Web Service from `Dockerfile` (or use `render.yaml`)  
-3. In Render → service → **Deploy Hook** → copy URL  
-4. GitHub repo → **Settings → Secrets → Actions** → add `RENDER_DEPLOY_HOOK_URL`  
-5. Optionally create environment `production` (deploy workflow references it)
+1. Render → **Blueprint** (or Docker Web Service) from this repo  
+2. Copy **Deploy Hook** URL  
+3. GitHub → **Settings → Secrets → Actions** → `RENDER_DEPLOY_HOOK_URL`  
+4. Push to `main` (or empty commit) and confirm **Deploy** logs `Deploy hook accepted`
 
-Env vars on the host:
-
-```bash
-PORT=4040
-NODE_ENV=production
-TICKET_HMAC_SECRET=<strong-random-secret>
-```
+Render sets `PORT` automatically. Set `TICKET_HMAC_SECRET` in Render (Blueprint can auto-generate it).
 
 ## Features
 

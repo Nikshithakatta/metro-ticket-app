@@ -377,8 +377,8 @@ if (fs.existsSync(clientDist)) {
   });
 }
 
-app.listen(PORT, () => {
-  console.log(`MetroCity API listening on http://localhost:${PORT}`);
+app.listen(PORT, "0.0.0.0", () => {
+  console.log(`MetroCity API listening on http://0.0.0.0:${PORT}`);
   if (fs.existsSync(clientDist)) {
     console.log(`Serving UI from ${clientDist}`);
   }

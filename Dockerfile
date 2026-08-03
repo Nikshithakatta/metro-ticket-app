@@ -18,6 +18,7 @@ RUN npm ci --omit=dev
 FROM node:22-bookworm-slim AS runtime
 WORKDIR /app
 ENV NODE_ENV=production
+# Render (and most hosts) inject PORT at runtime; default for local docker runs.
 ENV PORT=4040
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 make g++ \
@@ -30,7 +31,7 @@ COPY server/scripts ./server/scripts
 COPY --from=client-build /app/client/dist ./client/dist
 
 WORKDIR /app/server
-RUN node src/seed.js
+RUN mkdir -p data && node src/seed.js
 
 EXPOSE 4040
 CMD ["node", "src/index.js"]

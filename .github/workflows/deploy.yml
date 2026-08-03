@@ -1,8 +1,7 @@
 name: Deploy
 
-# Deploys when CI succeeds on main/master.
-# Configure repository secrets before enabling a real deploy target:
-#   RENDER_DEPLOY_HOOK_URL  – Render "Deploy Hook" URL (optional)
+# Runs after CI succeeds on main/master, or via manual "Run workflow".
+# Requires repo secret: RENDER_DEPLOY_HOOK_URL (Render → Service → Deploy Hook)
 
 on:
   workflow_run:
@@ -21,40 +20,29 @@ jobs:
     runs-on: ubuntu-latest
     environment: production
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-
-      - name: Install OS build tools
-        run: sudo apt-get update && sudo apt-get install -y build-essential python3
-
-      - name: Install and seed server
-        working-directory: server
-        run: |
-          npm ci
-          npm run seed
-
-      - name: Install and build client
-        working-directory: client
-        run: |
-          npm ci
-          npm run build
-
-      - name: Trigger Render deploy hook (optional)
+      - name: Trigger Render deploy (after green CI)
         env:
           RENDER_DEPLOY_HOOK_URL: ${{ secrets.RENDER_DEPLOY_HOOK_URL }}
         run: |
           if [ -z "$RENDER_DEPLOY_HOOK_URL" ]; then
-            echo "No RENDER_DEPLOY_HOOK_URL secret set."
-            echo "Build succeeded. Add the secret to enable auto-deploy,"
-            echo "or deploy the Docker image from Dockerfile manually."
+            echo "::warning::RENDER_DEPLOY_HOOK_URL secret is not set."
+            echo "CD is not connected yet. Follow DEPLOY.md:"
+            echo "  1) Create Render Docker service from this repo / render.yaml"
+            echo "  2) Copy Deploy Hook URL"
+            echo "  3) Add GitHub Actions secret RENDER_DEPLOY_HOOK_URL"
             exit 0
           fi
-          echo "Triggering Render deploy..."
-          curl -fsS -X POST "$RENDER_DEPLOY_HOOK_URL"
+
+          echo "CI is green — requesting Render redeploy..."
+          HTTP_CODE=$(curl -sS -o /tmp/render-hook-body.txt -w "%{http_code}" \
+            -X POST "$RENDER_DEPLOY_HOOK_URL")
+          echo "Render response HTTP $HTTP_CODE"
+          cat /tmp/render-hook-body.txt || true
           echo
-          echo "Deploy hook accepted"
+
+          if [ "$HTTP_CODE" -lt 200 ] || [ "$HTTP_CODE" -ge 300 ]; then
+            echo "::error::Deploy hook failed with HTTP $HTTP_CODE"
+            exit 1
+          fi
+
+          echo "Deploy hook accepted. Watch the Render dashboard for the build."

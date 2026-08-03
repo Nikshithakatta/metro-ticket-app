@@ -1,13 +1,23 @@
+# Render Blueprint — MetroCity Tickets
+# https://render.com/docs/blueprint-spec
+#
+# CD model: Auto-Deploy is disabled. GitHub Actions Deploy workflow
+# calls a Deploy Hook only after CI succeeds on main.
+
 services:
   - type: web
     name: metrocity-tickets
     runtime: docker
     plan: free
+    region: oregon
+    branch: main
+    dockerContext: .
+    dockerfilePath: ./Dockerfile
+    autoDeploy: false
     healthCheckPath: /api/health
     envVars:
       - key: NODE_ENV
         value: production
-      - key: PORT
-        value: "4040"
+      # Render injects PORT at runtime — do not hardcode it here.
       - key: TICKET_HMAC_SECRET
         generateValue: true
