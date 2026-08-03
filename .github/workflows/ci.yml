@@ -1,0 +1,75 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: |
+            server/package-lock.json
+            client/package-lock.json
+
+      - name: Install OS build tools (better-sqlite3)
+        run: sudo apt-get update && sudo apt-get install -y build-essential python3
+
+      - name: Install server dependencies
+        run: npm ci --prefix server
+
+      - name: Seed database
+        run: npm run seed --prefix server
+
+      - name: Install client dependencies
+        run: npm ci --prefix client
+
+      - name: Build client
+        run: npm run build --prefix client
+
+      - name: Start API and run smoke tests
+        env:
+          PORT: "4040"
+          TICKET_HMAC_SECRET: ci-smoke-secret
+          BASE_URL: http://127.0.0.1:4040
+        run: |
+          node server/src/index.js &
+          SERVER_PID=$!
+          cleanup() { kill $SERVER_PID 2>/dev/null || true; }
+          trap cleanup EXIT
+
+          for i in $(seq 1 30); do
+            if curl -sf "$BASE_URL/api/health" >/dev/null; then
+              echo "Server is up"
+              break
+            fi
+            sleep 1
+            if [ "$i" -eq 30 ]; then
+              echo "Server failed to start"
+              exit 1
+            fi
+          done
+
+          npm run smoke --prefix server
+
+      - name: Upload client build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: client-dist
+          path: client/dist
+          retention-days: 7

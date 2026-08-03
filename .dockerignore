@@ -1,0 +1,12 @@
+node_modules
+npm-debug.log
+.git
+.github
+**/data
+client/dist
+client/node_modules
+server/node_modules
+server/data
+.DS_Store
+*.md
+!README.md

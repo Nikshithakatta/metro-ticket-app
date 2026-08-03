@@ -1,0 +1,60 @@
+name: Deploy
+
+# Deploys when CI succeeds on main/master.
+# Configure repository secrets before enabling a real deploy target:
+#   RENDER_DEPLOY_HOOK_URL  – Render "Deploy Hook" URL (optional)
+# Or switch the deploy step to Railway / Fly / SSH as needed.
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main, master]
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       (github.event.workflow_run.head_branch == 'main' ||
+        github.event.workflow_run.head_branch == 'master'))
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: |
+            server/package-lock.json
+            client/package-lock.json
+
+      - name: Install OS build tools
+        run: sudo apt-get update && sudo apt-get install -y build-essential python3
+
+      - name: Build release
+        run: |
+          npm ci --prefix server
+          npm run seed --prefix server
+          npm ci --prefix client
+          npm run build --prefix client
+
+      - name: Trigger Render deploy hook (optional)
+        env:
+          RENDER_DEPLOY_HOOK_URL: ${{ secrets.RENDER_DEPLOY_HOOK_URL }}
+        run: |
+          if [ -z "$RENDER_DEPLOY_HOOK_URL" ]; then
+            echo "No RENDER_DEPLOY_HOOK_URL secret set."
+            echo "Build succeeded. Add the secret to enable auto-deploy,"
+            echo "or deploy the Docker image from Dockerfile manually."
+            exit 0
+          fi
+          echo "Triggering Render deploy..."
+          curl -fsS -X POST "$RENDER_DEPLOY_HOOK_URL"
+          echo
+          echo "Deploy hook accepted"
