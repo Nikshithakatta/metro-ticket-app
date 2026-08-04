@@ -77,6 +77,68 @@ app.get("/api/auth/me", authRequired, (req, res) => {
   res.json({ user: req.user });
 });
 
+app.get("/api/me/favorites", authRequired, (req, res) => {
+  res.json(getFavorites(req.user.id));
+});
+
+app.put("/api/me/favorites", authRequired, (req, res) => {
+  try {
+    const body = req.body || {};
+    for (const slot of ["home", "work"]) {
+      if (!(slot in body)) continue;
+      const stationId = body[slot];
+      if (stationId === null || stationId === "") {
+        db.prepare(
+          "DELETE FROM user_favorites WHERE user_id = ? AND slot = ?"
+        ).run(req.user.id, slot);
+        continue;
+      }
+      const station = db
+        .prepare("SELECT id FROM stations WHERE id = ?")
+        .get(stationId);
+      if (!station) {
+        return res.status(404).json({ error: `Unknown station for ${slot}` });
+      }
+      db.prepare(
+        `
+        INSERT INTO user_favorites (user_id, slot, station_id, updated_at)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(user_id, slot) DO UPDATE SET
+          station_id = excluded.station_id,
+          updated_at = excluded.updated_at
+      `
+      ).run(req.user.id, slot, stationId, new Date().toISOString());
+    }
+    res.json(getFavorites(req.user.id));
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get("/api/me/last-trip", authRequired, (req, res) => {
+  const row = db
+    .prepare(
+      `
+      SELECT * FROM bookings
+      WHERE user_id = ? AND status = 'paid'
+      ORDER BY created_at DESC
+      LIMIT 1
+    `
+    )
+    .get(req.user.id);
+  if (!row) return res.json({ trip: null });
+  const booking = shapeBooking(row);
+  res.json({
+    trip: {
+      from: booking.from,
+      to: booking.to,
+      ticketType: booking.ticketType,
+      bookingId: booking.id,
+      createdAt: booking.createdAt,
+    },
+  });
+});
+
 app.get("/api/stations", (req, res) => {
   const q = (req.query.q || "").toString().trim().toLowerCase();
   let rows = db
@@ -405,6 +467,24 @@ app.post("/api/tickets/:id/validate", (req, res) => {
 function normalizeTicketType(raw) {
   const t = (raw || "single").toString();
   return TICKET_TYPES.has(t) ? t : "single";
+}
+
+function getFavorites(userId) {
+  const rows = db
+    .prepare(
+      `
+      SELECT f.slot, s.id, s.name, s.zone
+      FROM user_favorites f
+      JOIN stations s ON s.id = f.station_id
+      WHERE f.user_id = ?
+    `
+    )
+    .all(userId);
+  const out = { home: null, work: null };
+  for (const r of rows) {
+    out[r.slot] = { id: r.id, name: r.name, zone: r.zone };
+  }
+  return out;
 }
 
 function getBooking(id) {

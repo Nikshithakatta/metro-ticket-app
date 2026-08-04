@@ -17,6 +17,7 @@ export function resetSchema() {
     DROP TABLE IF EXISTS ticket_scans;
     DROP TABLE IF EXISTS tickets;
     DROP TABLE IF EXISTS bookings;
+    DROP TABLE IF EXISTS user_favorites;
     DROP TABLE IF EXISTS schedules;
     DROP TABLE IF EXISTS edges;
     DROP TABLE IF EXISTS station_lines;
@@ -70,6 +71,14 @@ export function initSchema() {
       headway_minutes INTEGER NOT NULL DEFAULT 6,
       first_minute INTEGER NOT NULL DEFAULT 330,
       last_minute INTEGER NOT NULL DEFAULT 1380
+    );
+
+    CREATE TABLE IF NOT EXISTS user_favorites (
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      slot TEXT NOT NULL CHECK (slot IN ('home', 'work')),
+      station_id TEXT NOT NULL REFERENCES stations(id),
+      updated_at TEXT NOT NULL,
+      PRIMARY KEY (user_id, slot)
     );
 
     CREATE TABLE IF NOT EXISTS bookings (

@@ -117,6 +117,22 @@ async function main() {
   const history = await req("/api/bookings", { headers: auth });
   assert(Array.isArray(history) && history.some((b) => b.id === booking.id), "personal history");
 
+  const favEmpty = await req("/api/me/favorites", { headers: auth });
+  assert(favEmpty.home === null && favEmpty.work === null, "favorites start empty");
+
+  const favSaved = await req("/api/me/favorites", {
+    method: "PUT",
+    headers: auth,
+    body: JSON.stringify({ home: "university", work: "airport" }),
+  });
+  assert(favSaved.home?.id === "university", "home favorite");
+  assert(favSaved.work?.id === "airport", "work favorite");
+
+  const last = await req("/api/me/last-trip", { headers: auth });
+  assert(last.trip?.from?.id === "university", "last trip from");
+  assert(last.trip?.to?.id === "airport", "last trip to");
+  assert(last.trip?.ticketType === "return", "last trip type");
+
   const day = await req("/api/bookings", {
     method: "POST",
     headers: auth,

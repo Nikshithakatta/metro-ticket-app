@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { api } from "../api.js";
 import { useAuth } from "../auth.jsx";
 import StationSearch from "../components/StationSearch.jsx";
@@ -24,6 +24,7 @@ const TICKET_TYPES = [
 
 export default function Home() {
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const { user, isLoggedIn } = useAuth();
   const [stations, setStations] = useState([]);
   const [lines, setLines] = useState([]);
@@ -37,6 +38,9 @@ export default function Home() {
   const [paying, setPaying] = useState(false);
   const [crowd, setCrowd] = useState(null);
   const [trains, setTrains] = useState([]);
+  const [favorites, setFavorites] = useState({ home: null, work: null });
+  const [lastTrip, setLastTrip] = useState(null);
+  const [favBusy, setFavBusy] = useState("");
 
   useEffect(() => {
     if (user?.name) setName(user.name);
@@ -50,6 +54,44 @@ export default function Home() {
       })
       .catch((e) => setError(e.message));
   }, []);
+
+  useEffect(() => {
+    const qFrom = searchParams.get("from");
+    const qTo = searchParams.get("to");
+    const qType = searchParams.get("ticketType");
+    if (!qFrom && !qTo && !qType) return;
+    if (qFrom) setFrom(qFrom);
+    if (qTo) setTo(qTo);
+    if (qType && ["single", "return", "day_pass"].includes(qType)) {
+      setTicketType(qType);
+    }
+    setJourney(null);
+    setSearchParams({}, { replace: true });
+  }, [searchParams, setSearchParams]);
+
+  useEffect(() => {
+    if (!isLoggedIn) {
+      setFavorites({ home: null, work: null });
+      setLastTrip(null);
+      return;
+    }
+    let cancelled = false;
+    Promise.all([api.getFavorites(), api.lastTrip()])
+      .then(([fav, last]) => {
+        if (cancelled) return;
+        setFavorites(fav);
+        setLastTrip(last.trip || null);
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setFavorites({ home: null, work: null });
+          setLastTrip(null);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [isLoggedIn]);
 
   useEffect(() => {
     if (!from) return;
@@ -75,6 +117,29 @@ export default function Home() {
     from &&
     to &&
     (ticketType === "day_pass" || from !== to);
+
+  function applyTrip(tripFrom, tripTo, type = "single") {
+    setFrom(tripFrom);
+    setTo(tripTo);
+    setTicketType(type);
+    setJourney(null);
+    setError("");
+  }
+
+  async function saveFavorite(slot) {
+    if (!isLoggedIn) return;
+    const stationId = slot === "home" ? from : to;
+    setFavBusy(slot);
+    setError("");
+    try {
+      const next = await api.setFavorites({ [slot]: stationId });
+      setFavorites(next);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setFavBusy("");
+    }
+  }
 
   async function planJourney(e) {
     e?.preventDefault();
@@ -104,6 +169,9 @@ export default function Home() {
         ticketType,
       });
       const { ticket } = await api.payBooking(booking.id);
+      if (isLoggedIn) {
+        api.lastTrip().then((r) => setLastTrip(r.trip || null)).catch(() => {});
+      }
       navigate(`/ticket/${ticket.id}`);
     } catch (err) {
       setError(err.message);
@@ -140,7 +208,7 @@ export default function Home() {
                 <Link to="/login" style={{ color: "var(--cyan-deep)" }}>
                   Sign in
                 </Link>{" "}
-                to keep personal history.
+                to save favorites and rebook trips.
               </p>
             )}
             <div className="ticket-type-row" role="radiogroup" aria-label="Ticket type">
@@ -160,6 +228,82 @@ export default function Home() {
                 </button>
               ))}
             </div>
+
+            {isLoggedIn && (
+              <div className="quick-actions">
+                <div className="quick-row">
+                  <span className="muted quick-label">Favorites</span>
+                  <button
+                    type="button"
+                    className="chip-btn"
+                    disabled={!favorites.home}
+                    onClick={() =>
+                      favorites.home && applyTrip(favorites.home.id, to, ticketType)
+                    }
+                    title={favorites.home ? favorites.home.name : "Not set"}
+                  >
+                    Home{favorites.home ? `: ${favorites.home.name}` : ""}
+                  </button>
+                  <button
+                    type="button"
+                    className="chip-btn"
+                    disabled={!favorites.work}
+                    onClick={() =>
+                      favorites.work && applyTrip(from, favorites.work.id, ticketType)
+                    }
+                    title={favorites.work ? favorites.work.name : "Not set"}
+                  >
+                    Work{favorites.work ? `: ${favorites.work.name}` : ""}
+                  </button>
+                  <button
+                    type="button"
+                    className="chip-btn chip-accent"
+                    disabled={!favorites.home || !favorites.work}
+                    onClick={() =>
+                      favorites.home &&
+                      favorites.work &&
+                      applyTrip(favorites.home.id, favorites.work.id, "single")
+                    }
+                  >
+                    Home → Work
+                  </button>
+                </div>
+                <div className="quick-row">
+                  <button
+                    type="button"
+                    className="chip-btn"
+                    disabled={favBusy === "home" || !from}
+                    onClick={() => saveFavorite("home")}
+                  >
+                    {favBusy === "home" ? "Saving…" : "Save From as Home"}
+                  </button>
+                  <button
+                    type="button"
+                    className="chip-btn"
+                    disabled={favBusy === "work" || !to}
+                    onClick={() => saveFavorite("work")}
+                  >
+                    {favBusy === "work" ? "Saving…" : "Save To as Work"}
+                  </button>
+                  {lastTrip && (
+                    <button
+                      type="button"
+                      className="chip-btn chip-accent"
+                      onClick={() =>
+                        applyTrip(
+                          lastTrip.from.id,
+                          lastTrip.to.id,
+                          lastTrip.ticketType
+                        )
+                      }
+                    >
+                      Rebook last: {lastTrip.from.name} → {lastTrip.to.name}
+                    </button>
+                  )}
+                </div>
+              </div>
+            )}
+
             <div className="row-2">
               <StationSearch
                 id="from"

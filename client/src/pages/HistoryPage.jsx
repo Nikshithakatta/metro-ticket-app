@@ -9,6 +9,15 @@ function typeLabel(t) {
   return "Single";
 }
 
+function rebookHref(b) {
+  const params = new URLSearchParams({
+    from: b.from.id,
+    to: b.to.id,
+    ticketType: b.ticketType || "single",
+  });
+  return `/?${params.toString()}`;
+}
+
 export default function HistoryPage() {
   const { ready, isLoggedIn } = useAuth();
   const [rows, setRows] = useState([]);
@@ -34,12 +43,25 @@ export default function HistoryPage() {
     return <Navigate to="/login" replace state={{ from: "/history" }} />;
   }
 
+  const lastPaid = rows.find((b) => b.status === "paid");
+
   return (
     <section className="section fade-in">
       <h1 style={{ fontFamily: "var(--font-display)", letterSpacing: "-0.03em" }}>
         My tickets
       </h1>
       <p className="muted">Your personal booking history.</p>
+      {lastPaid && (
+        <p style={{ marginTop: "0.75rem" }}>
+          <Link
+            className="btn btn-primary"
+            style={{ width: "auto", display: "inline-flex" }}
+            to={rebookHref(lastPaid)}
+          >
+            Rebook last trip · {lastPaid.from.name} → {lastPaid.to.name}
+          </Link>
+        </p>
+      )}
       {error && <p className="error">{error}</p>}
 
       <div className="list-card" style={{ marginTop: "1.25rem" }}>
@@ -64,16 +86,22 @@ export default function HistoryPage() {
             </div>
             <div style={{ textAlign: "right" }}>
               <span className={`status-badge status-${b.status}`}>{b.status}</span>
-              {b.ticketId && (
-                <div style={{ marginTop: "0.45rem" }}>
+              <div style={{ marginTop: "0.45rem", display: "flex", flexDirection: "column", gap: "0.25rem", alignItems: "flex-end" }}>
+                <Link
+                  to={rebookHref(b)}
+                  style={{ color: "var(--cyan-deep)", fontWeight: 600 }}
+                >
+                  Rebook
+                </Link>
+                {b.ticketId && (
                   <Link
                     to={`/ticket/${b.ticketId}`}
                     style={{ color: "var(--cyan-deep)", fontWeight: 600 }}
                   >
                     View ticket
                   </Link>
-                </div>
-              )}
+                )}
+              </div>
             </div>
           </div>
         ))}
