@@ -712,3 +712,51 @@ main {
     grid-template-columns: 1fr;
   }
 }
+
+.quick-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  margin: 0 0 1rem;
+  padding: 0.75rem;
+  border-radius: 12px;
+  background: #eef6fb;
+  border: 1px solid #d5e2ee;
+}
+
+.quick-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  align-items: center;
+}
+
+.quick-label {
+  font-size: 0.78rem;
+  margin-right: 0.15rem;
+}
+
+.chip-btn {
+  border: 1px solid #c9dae8;
+  background: white;
+  border-radius: 999px;
+  padding: 0.35rem 0.7rem;
+  font-size: 0.82rem;
+  cursor: pointer;
+  color: var(--ink);
+}
+
+.chip-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.chip-btn:not(:disabled):hover {
+  border-color: var(--cyan-deep);
+}
+
+.chip-btn.chip-accent {
+  background: rgba(46, 196, 182, 0.14);
+  border-color: var(--cyan-deep);
+  font-weight: 600;
+}

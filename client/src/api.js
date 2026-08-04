@@ -54,6 +54,10 @@ export const api = {
   getTicket: (id) => request(`/tickets/${id}`),
   getSharedTicket: (token) => request(`/share/${token}`),
   listBookings: () => request("/bookings"),
+  getFavorites: () => request("/me/favorites"),
+  setFavorites: (body) =>
+    request("/me/favorites", { method: "PUT", body: JSON.stringify(body) }),
+  lastTrip: () => request("/me/last-trip"),
   validateTicket: (id) =>
     request(`/tickets/${id}/validate`, { method: "POST", body: "{}" }),
 };
